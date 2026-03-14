@@ -14,8 +14,16 @@ interface Footstep {
 }
 
 export class GameScene extends Phaser.Scene {
-  private player!: Phaser.GameObjects.Arc;
-  private exitZone!: Phaser.GameObjects.Rectangle;
+  private playerGfx!: Phaser.GameObjects.Graphics;
+  private playerX = 0;
+  private playerY = 0;
+  private playerAngle = 0;
+
+  private exitGfx!: Phaser.GameObjects.Graphics;
+  private exitX = 0;
+  private exitY = 0;
+  private exitTime = 0;
+
   private cams: CameraState[] = [];
   private coneGfx!: Phaser.GameObjects.Graphics;
   private alertBar!: Phaser.GameObjects.Graphics;
@@ -82,11 +90,14 @@ export class GameScene extends Phaser.Scene {
 
     const dt = delta / 1000;
     this.elapsed += dt;
+    this.exitTime += dt;
     this.movePlayer(dt);
     this.updateCameras(dt);
     this.applyNoise(dt);
     this.drawTrail(dt);
     this.drawCones();
+    this.drawPlayer();
+    this.drawExitPortal();
     this.checkDetection(dt);
     this.drawVignette();
     this.checkExit();
@@ -115,12 +126,96 @@ export class GameScene extends Phaser.Scene {
   // ── player ──────────────────────────────────────────────
   private spawnPlayer(): void {
     const { col, row } = findTile(2);
-    this.player = this.add.circle(
-      col * TILE + TILE / 2,
-      row * TILE + TILE / 2,
-      10,
-      0x44dd88,
-    ).setDepth(10);
+    this.playerX = col * TILE + TILE / 2;
+    this.playerY = row * TILE + TILE / 2;
+    this.playerAngle = Math.PI / 2; // facing down initially
+    this.playerGfx = this.add.graphics().setDepth(10);
+  }
+
+  private drawPlayer(): void {
+    const gfx = this.playerGfx;
+    gfx.clear();
+
+    const sneaking = this.shiftKey.isDown;
+    const x = this.playerX;
+    const y = this.playerY;
+    const angle = this.playerAngle;
+
+    if (this.caught) {
+      // dead pose — X shape
+      gfx.lineStyle(3, 0xff0000);
+      gfx.beginPath();
+      gfx.moveTo(x - 7, y - 7); gfx.lineTo(x + 7, y + 7);
+      gfx.moveTo(x + 7, y - 7); gfx.lineTo(x - 7, y + 7);
+      gfx.strokePath();
+      return;
+    }
+
+    if (this.won) {
+      // celebration — star-ish
+      gfx.fillStyle(0x44ddff);
+      gfx.fillCircle(x, y, 10);
+      gfx.lineStyle(2, 0xffffff, 0.8);
+      gfx.strokeCircle(x, y, 10);
+      return;
+    }
+
+    const bodyLen = sneaking ? 7 : 10;
+    const bodyWidth = sneaking ? 5 : 7;
+    const headR = sneaking ? 3 : 4;
+
+    // body color
+    const bodyColor = sneaking ? 0x227744 : 0x44dd88;
+    const outlineColor = sneaking ? 0x115522 : 0x22aa66;
+
+    // direction vectors
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    const px = -dy; // perpendicular
+    const py = dx;
+
+    // triangle body pointing in movement direction
+    const noseTipX = x + dx * bodyLen;
+    const noseTipY = y + dy * bodyLen;
+    const backLeftX = x - dx * (bodyLen * 0.4) + px * bodyWidth;
+    const backLeftY = y - dy * (bodyLen * 0.4) + py * bodyWidth;
+    const backRightX = x - dx * (bodyLen * 0.4) - px * bodyWidth;
+    const backRightY = y - dy * (bodyLen * 0.4) - py * bodyWidth;
+
+    gfx.fillStyle(bodyColor);
+    gfx.beginPath();
+    gfx.moveTo(noseTipX, noseTipY);
+    gfx.lineTo(backLeftX, backLeftY);
+    gfx.lineTo(backRightX, backRightY);
+    gfx.closePath();
+    gfx.fillPath();
+
+    gfx.lineStyle(1, outlineColor);
+    gfx.beginPath();
+    gfx.moveTo(noseTipX, noseTipY);
+    gfx.lineTo(backLeftX, backLeftY);
+    gfx.lineTo(backRightX, backRightY);
+    gfx.closePath();
+    gfx.strokePath();
+
+    // head circle offset slightly forward
+    const headX = x + dx * 2;
+    const headY = y + dy * 2;
+    gfx.fillStyle(bodyColor);
+    gfx.fillCircle(headX, headY, headR);
+    gfx.lineStyle(1, outlineColor);
+    gfx.strokeCircle(headX, headY, headR);
+
+    // eyes — two small dots on the head facing forward
+    const eyeOffset = headR * 0.5;
+    const eyeDist = headR * 0.35;
+    const eye1X = headX + dx * eyeOffset + px * eyeDist;
+    const eye1Y = headY + dy * eyeOffset + py * eyeDist;
+    const eye2X = headX + dx * eyeOffset - px * eyeDist;
+    const eye2Y = headY + dy * eyeOffset - py * eyeDist;
+    gfx.fillStyle(0xffffff);
+    gfx.fillCircle(eye1X, eye1Y, 1.2);
+    gfx.fillCircle(eye2X, eye2Y, 1.2);
   }
 
   private movePlayer(dt: number): void {
@@ -141,25 +236,26 @@ export class GameScene extends Phaser.Scene {
 
     const moving = vx !== 0 || vy !== 0;
 
-    const nx = this.player.x + vx * speed * dt;
-    const ny = this.player.y + vy * speed * dt;
-    const r = 10;
+    if (moving) {
+      this.playerAngle = Math.atan2(vy, vx);
+    }
 
-    if (!this.hitsWall(nx, this.player.y, r)) this.player.x = nx;
-    if (!this.hitsWall(this.player.x, ny, r)) this.player.y = ny;
+    const nx = this.playerX + vx * speed * dt;
+    const ny = this.playerY + vy * speed * dt;
+    const r = 8;
 
-    this.player.x = Phaser.Math.Clamp(this.player.x, r, WIDTH - r);
-    this.player.y = Phaser.Math.Clamp(this.player.y, r, HEIGHT - r);
+    if (!this.hitsWall(nx, this.playerY, r)) this.playerX = nx;
+    if (!this.hitsWall(this.playerX, ny, r)) this.playerY = ny;
 
-    this.player.setFillStyle(sneaking ? 0x227744 : 0x44dd88);
-    this.player.setRadius(sneaking ? 8 : 10);
+    this.playerX = Phaser.Math.Clamp(this.playerX, r, WIDTH - r);
+    this.playerY = Phaser.Math.Clamp(this.playerY, r, HEIGHT - r);
 
     // drop footsteps when running (not sneaking)
     if (moving && !sneaking) {
       this.footstepTimer += dt;
       if (this.footstepTimer > 0.08) {
         this.footstepTimer = 0;
-        this.footsteps.push({ x: this.player.x, y: this.player.y, life: 1.0 });
+        this.footsteps.push({ x: this.playerX, y: this.playerY, life: 1.0 });
       }
     }
   }
@@ -177,34 +273,67 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  // ── exit ────────────────────────────────────────────────
+  // ── exit portal ─────────────────────────────────────────
   private buildExit(): void {
     const { col, row } = findTile(3);
-    this.exitZone = this.add.rectangle(
-      col * TILE + TILE / 2,
-      row * TILE + TILE / 2,
-      TILE, TILE, 0x44ddff, 0.9,
-    ).setDepth(5).setStrokeStyle(2, 0xffffff, 0.8);
+    this.exitX = col * TILE + TILE / 2;
+    this.exitY = row * TILE + TILE / 2;
+    this.exitTime = 0;
+    this.exitGfx = this.add.graphics().setDepth(5);
+  }
 
-    this.tweens.add({
-      targets: this.exitZone,
-      scaleX: { from: 0.85, to: 1.0 },
-      scaleY: { from: 0.85, to: 1.0 },
-      alpha: { from: 0.7, to: 1.0 },
-      duration: 800,
-      yoyo: true,
-      repeat: -1,
+  private drawExitPortal(): void {
+    const gfx = this.exitGfx;
+    gfx.clear();
+    const x = this.exitX;
+    const y = this.exitY;
+    const t = this.exitTime;
+
+    // outer glow
+    gfx.fillStyle(0x44ddff, 0.08 + Math.sin(t * 3) * 0.04);
+    gfx.fillCircle(x, y, 18);
+
+    // rotating ring segments
+    const rings = [
+      { r: 14, width: 2, speed: 1.5, color: 0x44ddff, segments: 3 },
+      { r: 10, width: 2, speed: -2.2, color: 0x88eeff, segments: 4 },
+      { r: 6, width: 1.5, speed: 3.0, color: 0xffffff, segments: 2 },
+    ];
+
+    rings.forEach(ring => {
+      const segAngle = (Math.PI * 2) / ring.segments;
+      const gapAngle = segAngle * 0.3;
+      gfx.lineStyle(ring.width, ring.color, 0.7 + Math.sin(t * 2) * 0.2);
+
+      for (let i = 0; i < ring.segments; i++) {
+        const start = t * ring.speed + i * segAngle;
+        const end = start + segAngle - gapAngle;
+        gfx.beginPath();
+        gfx.arc(x, y, ring.r, start, end, false);
+        gfx.strokePath();
+      }
     });
+
+    // center diamond
+    const pulse = 1 + Math.sin(t * 4) * 0.15;
+    const s = 3 * pulse;
+    gfx.fillStyle(0xffffff, 0.9);
+    gfx.beginPath();
+    gfx.moveTo(x, y - s);
+    gfx.lineTo(x + s, y);
+    gfx.lineTo(x, y + s);
+    gfx.lineTo(x - s, y);
+    gfx.closePath();
+    gfx.fillPath();
   }
 
   private checkExit(): void {
-    const dx = this.player.x - this.exitZone.x;
-    const dy = this.player.y - this.exitZone.y;
+    const dx = this.playerX - this.exitX;
+    const dy = this.playerY - this.exitY;
     if (Math.abs(dx) < TILE / 2 && Math.abs(dy) < TILE / 2) {
       this.won = true;
       const t = this.elapsed.toFixed(1);
       this.hudText.setText(`ESCAPED in ${t}s! press R to play again`);
-      this.player.setFillStyle(0x44bbff);
       this.input.keyboard!.once('keydown-R', () => this.scene.restart());
     }
   }
@@ -249,8 +378,8 @@ export class GameScene extends Phaser.Scene {
     if (!moving) return;
 
     this.cams.forEach(cam => {
-      const dx = this.player.x - cam.x;
-      const dy = this.player.y - cam.y;
+      const dx = this.playerX - cam.x;
+      const dy = this.playerY - cam.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist > NOISE_RADIUS) return;
@@ -309,14 +438,13 @@ export class GameScene extends Phaser.Scene {
   private checkDetection(dt: number): void {
     let seen = false;
 
-    // compute proximity (how close to any cone edge)
     this.proximity = this.cams.reduce((closest, cam) => {
-      const d = nearestConeDistance(this.player.x, this.player.y, cam);
+      const d = nearestConeDistance(this.playerX, this.playerY, cam);
       return Math.min(closest, d);
     }, Infinity);
 
     this.cams.forEach(cam => {
-      cam.detected = isPointInCone(this.player.x, this.player.y, cam);
+      cam.detected = isPointInCone(this.playerX, this.playerY, cam);
       if (cam.detected) seen = true;
     });
 
@@ -324,7 +452,6 @@ export class GameScene extends Phaser.Scene {
       this.alert = Math.min(1, this.alert + dt * 0.8);
       if (this.alert >= 1) {
         this.caught = true;
-        this.player.setFillStyle(0xff0000);
         const t = this.elapsed.toFixed(1);
         this.hudText.setText(`DETECTED at ${t}s! press R to retry`);
         this.input.keyboard!.once('keydown-R', () => this.scene.restart());
@@ -339,7 +466,6 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.vignetteGfx;
     gfx.clear();
 
-    // proximity warning: glow red edges when close to a cone
     const dangerDist = CONE_RANGE * 0.6;
     if (this.proximity < dangerDist) {
       const intensity = 1 - (this.proximity / dangerDist);
@@ -347,13 +473,9 @@ export class GameScene extends Phaser.Scene {
       const thickness = 8 + intensity * 24;
 
       gfx.fillStyle(0xff2222, alpha);
-      // top
       gfx.fillRect(0, 0, WIDTH, thickness);
-      // bottom
       gfx.fillRect(0, HEIGHT - thickness, WIDTH, thickness);
-      // left
       gfx.fillRect(0, 0, thickness, HEIGHT);
-      // right
       gfx.fillRect(WIDTH - thickness, 0, thickness, HEIGHT);
     }
   }
