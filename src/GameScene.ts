@@ -372,14 +372,19 @@ export class GameScene extends Phaser.Scene {
 
   // ── cameras ─────────────────────────────────────────────
   private buildCameras(): void {
-    this.cams = this.cameraDefs.map(def => ({
-      ...def,
-      x: def.col * TILE + TILE / 2,
-      y: def.row * TILE + TILE / 2,
-      currentAngle: def.baseAngle,
-      time: Math.random() * Math.PI * 2,
-      detected: false,
-    }));
+    this.cams = this.cameraDefs.map(def => {
+      // offset camera toward its mount wall so it hugs the edge
+      const wallDirX = def.wallCol - def.col;
+      const wallDirY = def.wallRow - def.row;
+      return {
+        ...def,
+        x: def.col * TILE + TILE / 2 + wallDirX * (TILE / 2 - 2),
+        y: def.row * TILE + TILE / 2 + wallDirY * (TILE / 2 - 2),
+        currentAngle: def.baseAngle,
+        time: Math.random() * Math.PI * 2,
+        detected: false,
+      };
+    });
 
     const gfx = this.add.graphics().setDepth(15);
     this.cams.forEach(cam => {

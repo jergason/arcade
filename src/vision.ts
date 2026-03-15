@@ -10,7 +10,10 @@ export const setGrid = (grid: TileType[][]): void => {
   currentGrid = grid;
 };
 
-export const raycast = (ox: number, oy: number, angle: number, maxDist: number): number => {
+export const raycast = (
+  ox: number, oy: number, angle: number, maxDist: number,
+  skipCol = -1, skipRow = -1,
+): number => {
   const rad = Phaser.Math.DegToRad(angle);
   const dx = Math.cos(rad);
   const dy = Math.sin(rad);
@@ -24,6 +27,7 @@ export const raycast = (ox: number, oy: number, angle: number, maxDist: number):
     const row = Math.floor(y / TILE);
 
     if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return dist;
+    if (col === skipCol && row === skipRow) continue;
     if (currentGrid[row]?.[col] === 1) return dist;
   }
   return maxDist;
@@ -41,7 +45,7 @@ export const isPointInCone = (px: number, py: number, cam: CameraState): boolean
 
   if (Math.abs(diff) > CONE_HALF_ANGLE) return false;
 
-  const losRange = raycast(cam.x, cam.y, angleToPoint, CONE_RANGE);
+  const losRange = raycast(cam.x, cam.y, angleToPoint, CONE_RANGE, cam.wallCol, cam.wallRow);
   return dist <= losRange;
 };
 
@@ -54,7 +58,7 @@ export const buildConePolygon = (cam: CameraState, numRays = 30): Point[] => {
 
   for (let i = 0; i <= numRays; i++) {
     const angle = startAngle + step * i;
-    const dist = raycast(cam.x, cam.y, angle, CONE_RANGE);
+    const dist = raycast(cam.x, cam.y, angle, CONE_RANGE, cam.wallCol, cam.wallRow);
     const rad = Phaser.Math.DegToRad(angle);
     points.push({
       x: cam.x + Math.cos(rad) * dist,

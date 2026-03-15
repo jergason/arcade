@@ -64,24 +64,21 @@ const placeWallCluster = (grid: TileType[][], rng: () => number): void => {
   });
 };
 
-// find floor tiles adjacent to walls — camera goes on the FLOOR tile, facing away from wall
-const findCameraSpots = (grid: TileType[][]): { col: number; row: number; wallDir: number }[] => {
-  const spots: { col: number; row: number; wallDir: number }[] = [];
+// find floor tiles adjacent to walls — camera hugs the wall edge, facing outward
+const findCameraSpots = (grid: TileType[][]): { col: number; row: number; wallCol: number; wallRow: number; wallDir: number }[] => {
+  const spots: { col: number; row: number; wallCol: number; wallRow: number; wallDir: number }[] = [];
 
   for (let r = 1; r < ROWS - 1; r++) {
     for (let c = 1; c < COLS - 1; c++) {
-      if (grid[r][c] !== 0) continue; // must be a floor tile
+      if (grid[r][c] !== 0) continue;
 
-      // check each neighbor — if it's a wall, this is a camera spot facing away from it
       const neighbors: [number, number][] = [[-1, 0], [1, 0], [0, -1], [0, 1]];
       for (const [dr, dc] of neighbors) {
         const wr = r + dr;
         const wc = c + dc;
         if (wr >= 0 && wr < ROWS && wc >= 0 && wc < COLS && grid[wr][wc] === 1) {
-          // camera on floor tile (r,c), facing AWAY from wall at (wr,wc)
-          // away = opposite direction of wall relative to camera
           const facingAngle = Math.atan2(-dr, -dc) * (180 / Math.PI);
-          spots.push({ col: c, row: r, wallDir: facingAngle });
+          spots.push({ col: c, row: r, wallCol: wc, wallRow: wr, wallDir: facingAngle });
         }
       }
     }
@@ -170,6 +167,8 @@ export const generateLevel = (seed: number): GeneratedLevel => {
     cameras.push({
       col: spot.col,
       row: spot.row,
+      wallCol: spot.wallCol,
+      wallRow: spot.wallRow,
       baseAngle: spot.wallDir,
       sweep: 50 + Math.floor(rng() * 40),
       speed: 0.25 + rng() * 0.35,
