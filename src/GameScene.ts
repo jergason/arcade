@@ -51,6 +51,17 @@ export class GameScene extends Phaser.Scene {
   private flashAlpha = 0;
   private caughtTimer = 0;
 
+  // touch controls
+  private touchVx = 0;
+  private touchVy = 0;
+  private touchSneaking = false;
+  private touchMoving = false;
+  private joystickId: number | null = null;
+  private joystickOrigin = { x: 0, y: 0 };
+  private sneakBtnGfx!: Phaser.GameObjects.Graphics;
+  private joystickGfx!: Phaser.GameObjects.Graphics;
+  private isTouchDevice = false;
+
   constructor() {
     super('GameScene');
   }
@@ -113,6 +124,98 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.updateHud();
+    this.setupTouch();
+  }
+
+  // ── touch controls ────────────────────────────────────
+  private setupTouch(): void {
+    this.isTouchDevice = this.sys.game.device.input.touch;
+    if (!this.isTouchDevice) return;
+
+    this.joystickGfx = this.add.graphics().setDepth(95);
+    this.sneakBtnGfx = this.add.graphics().setDepth(95);
+    this.drawSneakButton();
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      // right half = sneak toggle
+      if (pointer.x > WIDTH * 0.65 && pointer.y > HEIGHT * 0.5) {
+        this.touchSneaking = !this.touchSneaking;
+        this.drawSneakButton();
+        return;
+      }
+      // left side = joystick start
+      if (this.joystickId === null && pointer.x < WIDTH * 0.65) {
+        this.joystickId = pointer.id;
+        this.joystickOrigin = { x: pointer.x, y: pointer.y };
+      }
+    });
+
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.id !== this.joystickId) return;
+      const dx = pointer.x - this.joystickOrigin.x;
+      const dy = pointer.y - this.joystickOrigin.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const deadzone = 8;
+      if (dist < deadzone) {
+        this.touchVx = 0;
+        this.touchVy = 0;
+        this.touchMoving = false;
+      } else {
+        const clamped = Math.min(dist, 50);
+        this.touchVx = (dx / dist) * (clamped / 50);
+        this.touchVy = (dy / dist) * (clamped / 50);
+        this.touchMoving = true;
+      }
+    });
+
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.id === this.joystickId) {
+        this.joystickId = null;
+        this.touchVx = 0;
+        this.touchVy = 0;
+        this.touchMoving = false;
+      }
+    });
+  }
+
+  private drawSneakButton(): void {
+    if (!this.sneakBtnGfx) return;
+    const gfx = this.sneakBtnGfx;
+    gfx.clear();
+    const bx = WIDTH - 50;
+    const by = HEIGHT - 50;
+    const r = 28;
+    const active = this.touchSneaking;
+    gfx.fillStyle(active ? 0x227744 : 0x334455, active ? 0.7 : 0.4);
+    gfx.fillCircle(bx, by, r);
+    gfx.lineStyle(2, active ? 0x44dd88 : 0x667788, 0.8);
+    gfx.strokeCircle(bx, by, r);
+    // "S" label
+    if (!this.sneakLabel) {
+      this.sneakLabel = this.add.text(bx, by, 'snk', {
+        fontFamily: 'monospace', fontSize: '12px', color: '#ffffff',
+      }).setOrigin(0.5).setDepth(96);
+    }
+    this.sneakLabel.setAlpha(active ? 1 : 0.5);
+  }
+
+  private sneakLabel?: Phaser.GameObjects.Text;
+
+  private drawJoystick(): void {
+    if (!this.joystickGfx) return;
+    const gfx = this.joystickGfx;
+    gfx.clear();
+    if (this.joystickId === null) return;
+    const ox = this.joystickOrigin.x;
+    const oy = this.joystickOrigin.y;
+    // base ring
+    gfx.lineStyle(2, 0x667788, 0.4);
+    gfx.strokeCircle(ox, oy, 50);
+    // thumb
+    const tx = ox + this.touchVx * 50;
+    const ty = oy + this.touchVy * 50;
+    gfx.fillStyle(0xaabbcc, 0.5);
+    gfx.fillCircle(tx, ty, 16);
   }
 
   update(_time: number, delta: number): void {
@@ -138,6 +241,7 @@ export class GameScene extends Phaser.Scene {
     this.checkDetection();
     this.drawVignette();
     this.checkExit();
+    this.drawJoystick();
     this.updateHud();
   }
 
@@ -183,8 +287,11 @@ export class GameScene extends Phaser.Scene {
     if (t > 1.0) {
       this.cameras.main.setScroll(0, 0);
       const elapsed = this.elapsed.toFixed(1);
-      this.hudText.setText(`DETECTED at ${elapsed}s! press R to retry`);
+      this.hudText.setText(`DETECTED at ${elapsed}s! ${this.isTouchDevice ? 'tap' : 'press R'} to retry`);
       this.input.keyboard!.once('keydown-R', () => this.scene.restart());
+      if (this.isTouchDevice) {
+        this.input.once('pointerdown', () => this.scene.restart());
+      }
     }
   }
 
@@ -229,7 +336,7 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.playerGfx;
     gfx.clear();
 
-    const sneaking = this.shiftKey.isDown;
+    const sneaking = this.isSneaking();
     const x = this.playerX;
     const y = this.playerY;
     const angle = this.playerAngle;
@@ -299,8 +406,20 @@ export class GameScene extends Phaser.Scene {
     gfx.fillCircle(headX + dx * eyeOffset - px * eyeDist, headY + dy * eyeOffset - py * eyeDist, 1.2);
   }
 
+  private isSneaking(): boolean {
+    return this.shiftKey.isDown || this.touchSneaking;
+  }
+
+  private isMoving(): boolean {
+    return this.cursors.left.isDown || this.cursors.right.isDown ||
+      this.cursors.up.isDown || this.cursors.down.isDown ||
+      this.wasd.A.isDown || this.wasd.D.isDown ||
+      this.wasd.W.isDown || this.wasd.S.isDown ||
+      this.touchMoving;
+  }
+
   private movePlayer(dt: number): void {
-    const sneaking = this.shiftKey.isDown;
+    const sneaking = this.isSneaking();
     const speed = sneaking ? SNEAK_SPEED : PLAYER_SPEED;
     let vx = 0;
     let vy = 0;
@@ -311,6 +430,12 @@ export class GameScene extends Phaser.Scene {
     if (this.cursors.down.isDown || this.wasd.S.isDown) vy = 1;
 
     if (vx !== 0 && vy !== 0) { vx *= 0.707; vy *= 0.707; }
+
+    // merge touch input (touch overrides if active)
+    if (this.touchMoving) {
+      vx = this.touchVx;
+      vy = this.touchVy;
+    }
 
     const moving = vx !== 0 || vy !== 0;
     if (moving) this.playerAngle = Math.atan2(vy, vx);
@@ -406,12 +531,26 @@ export class GameScene extends Phaser.Scene {
       const total = this.totalTime.toFixed(1);
       const best = this.getBestTime(this.level);
       const bestStr = best !== null && best < this.elapsed ? ` (best: ${best.toFixed(1)}s)` : ' NEW BEST!';
-      this.hudText.setText(`ESCAPED LVL ${this.level} in ${t}s${bestStr} · R retry · N next`);
+      if (this.isTouchDevice) {
+        this.hudText.setText(`ESCAPED LVL ${this.level} in ${t}s${bestStr}\ntap left=retry · tap right=next`);
+      } else {
+        this.hudText.setText(`ESCAPED LVL ${this.level} in ${t}s${bestStr} · R retry · N next`);
+      }
       this.input.keyboard!.once('keydown-R', () => this.scene.restart());
       this.input.keyboard!.once('keydown-N', () => {
         this.level++;
         this.scene.restart();
       });
+      if (this.isTouchDevice) {
+        this.input.once('pointerdown', (pointer: Phaser.Input.Pointer) => {
+          if (pointer.x < WIDTH / 2) {
+            this.scene.restart();
+          } else {
+            this.level++;
+            this.scene.restart();
+          }
+        });
+      }
     }
   }
 
@@ -448,15 +587,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyNoise(dt: number): void {
-    const sneaking = this.shiftKey.isDown;
-    if (sneaking) return;
-
-    const moving = this.cursors.left.isDown || this.cursors.right.isDown ||
-      this.cursors.up.isDown || this.cursors.down.isDown ||
-      this.wasd.A.isDown || this.wasd.D.isDown ||
-      this.wasd.W.isDown || this.wasd.S.isDown;
-
-    if (!moving) return;
+    if (this.isSneaking()) return;
+    if (!this.isMoving()) return;
 
     this.cams.forEach(cam => {
       const dx = this.playerX - cam.x;
@@ -552,7 +684,9 @@ export class GameScene extends Phaser.Scene {
     this.timerText.setText(this.elapsed.toFixed(1) + 's');
 
     if (!this.caught && !this.won) {
-      this.hudText.setText('WASD/arrows · SHIFT to sneak (silent) · reach the portal');
+      this.hudText.setText(this.isTouchDevice
+        ? 'drag to move · SNK button to sneak · reach the portal'
+        : 'WASD/arrows · SHIFT to sneak (silent) · reach the portal');
     }
   }
 

@@ -8,6 +8,7 @@ const config: Phaser.Types.Core.GameConfig = {
   height: HEIGHT,
   backgroundColor: '#111111',
   scene: [GameScene],
+  input: { activePointers: 3 },
   physics: { default: 'arcade' },
   scale: {
     mode: Phaser.Scale.FIT,
