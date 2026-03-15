@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TILE, COLS, ROWS, WIDTH, HEIGHT, PLAYER_SPEED, SNEAK_SPEED, CONE_RANGE } from './constants';
+import { TILE, COLS, ROWS, WIDTH, HEIGHT, PLAYER_SPEED, SNEAK_SPEED } from './constants';
 import { generateLevel } from './procgen';
 import { setGrid, isPointInCone, buildConePolygon, nearestConeDistance } from './vision';
 import type { TileType, CameraDef, CameraState } from './types';
@@ -496,7 +496,9 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.vignetteGfx;
     gfx.clear();
 
-    const dangerDist = CONE_RANGE * 0.6;
+    // use the closest camera's range for danger distance
+    const maxRange = this.cams.reduce((m, c) => Math.max(m, c.range), 0);
+    const dangerDist = maxRange * 0.5;
     if (this.proximity < dangerDist) {
       const intensity = 1 - (this.proximity / dangerDist);
       const alpha = intensity * 0.3;

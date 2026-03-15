@@ -8,6 +8,8 @@ export interface CameraDef {
   baseAngle: number;
   sweep: number;
   speed: number;
+  range: number;
+  halfAngle: number;
 }
 
 export interface CameraState extends CameraDef {

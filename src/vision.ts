@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TILE, COLS, ROWS, CONE_RANGE, CONE_HALF_ANGLE } from './constants';
+import { TILE, COLS, ROWS } from './constants';
 import type { TileType, CameraState, Point } from './types';
 
 const RAY_STEP = 4;
@@ -38,27 +38,27 @@ export const isPointInCone = (px: number, py: number, cam: CameraState): boolean
   const dy = py - cam.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
 
-  if (dist > CONE_RANGE) return false;
+  if (dist > cam.range) return false;
 
   const angleToPoint = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
   const diff = Phaser.Math.Angle.ShortestBetween(cam.currentAngle, angleToPoint);
 
-  if (Math.abs(diff) > CONE_HALF_ANGLE) return false;
+  if (Math.abs(diff) > cam.halfAngle) return false;
 
-  const losRange = raycast(cam.x, cam.y, angleToPoint, CONE_RANGE, cam.wallCol, cam.wallRow);
+  const losRange = raycast(cam.x, cam.y, angleToPoint, cam.range, cam.wallCol, cam.wallRow);
   return dist <= losRange;
 };
 
 export const buildConePolygon = (cam: CameraState, numRays = 30): Point[] => {
-  const startAngle = cam.currentAngle - CONE_HALF_ANGLE;
-  const endAngle = cam.currentAngle + CONE_HALF_ANGLE;
+  const startAngle = cam.currentAngle - cam.halfAngle;
+  const endAngle = cam.currentAngle + cam.halfAngle;
   const step = (endAngle - startAngle) / numRays;
 
   const points: Point[] = [{ x: cam.x, y: cam.y }];
 
   for (let i = 0; i <= numRays; i++) {
     const angle = startAngle + step * i;
-    const dist = raycast(cam.x, cam.y, angle, CONE_RANGE, cam.wallCol, cam.wallRow);
+    const dist = raycast(cam.x, cam.y, angle, cam.range, cam.wallCol, cam.wallRow);
     const rad = Phaser.Math.DegToRad(angle);
     points.push({
       x: cam.x + Math.cos(rad) * dist,
@@ -74,18 +74,18 @@ export const nearestConeDistance = (px: number, py: number, cam: CameraState): n
   const dy = py - cam.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
 
-  if (dist > CONE_RANGE * 1.5) return dist;
+  if (dist > cam.range * 1.5) return dist;
 
   const angleToPoint = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
   const diff = Math.abs(Phaser.Math.Angle.ShortestBetween(cam.currentAngle, angleToPoint));
 
-  if (diff <= CONE_HALF_ANGLE && dist <= CONE_RANGE) {
+  if (diff <= cam.halfAngle && dist <= cam.range) {
     return 0;
   }
 
-  const angularGap = Math.max(0, diff - CONE_HALF_ANGLE);
-  const angularDist = Phaser.Math.DegToRad(angularGap) * Math.min(dist, CONE_RANGE);
-  const radialGap = Math.max(0, dist - CONE_RANGE);
+  const angularGap = Math.max(0, diff - cam.halfAngle);
+  const angularDist = Phaser.Math.DegToRad(angularGap) * Math.min(dist, cam.range);
+  const radialGap = Math.max(0, dist - cam.range);
 
   return Math.sqrt(angularDist * angularDist + radialGap * radialGap);
 };

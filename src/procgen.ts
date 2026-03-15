@@ -1,5 +1,5 @@
 import type { TileType, CameraDef } from './types';
-import { COLS, ROWS } from './constants';
+import { TILE, COLS, ROWS } from './constants';
 
 export interface GeneratedLevel {
   grid: TileType[][];
@@ -164,14 +164,29 @@ export const generateLevel = (seed: number): GeneratedLevel => {
     });
     if (tooClose) continue;
 
+    // vary camera types: some fast+narrow, some slow+wide, some long-range
+    const variant = rng();
+    const range = variant < 0.3
+      ? 4 * TILE + rng() * 2 * TILE   // short range (4-6 tiles)
+      : variant < 0.7
+        ? 6 * TILE + rng() * 2 * TILE  // medium (6-8 tiles)
+        : 8 * TILE + rng() * 3 * TILE; // long range (8-11 tiles)
+    const halfAngle = variant < 0.3
+      ? 28 + rng() * 15  // wide angle (28-43)
+      : variant < 0.7
+        ? 18 + rng() * 12 // medium (18-30)
+        : 10 + rng() * 10; // narrow sniper (10-20)
+
     cameras.push({
       col: spot.col,
       row: spot.row,
       wallCol: spot.wallCol,
       wallRow: spot.wallRow,
       baseAngle: spot.wallDir,
-      sweep: 50 + Math.floor(rng() * 40),
-      speed: 0.25 + rng() * 0.35,
+      sweep: 40 + Math.floor(rng() * 50),
+      speed: 0.15 + rng() * 0.5,
+      range,
+      halfAngle,
     });
   }
 
