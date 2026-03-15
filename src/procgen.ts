@@ -164,18 +164,26 @@ export const generateLevel = (seed: number): GeneratedLevel => {
     });
     if (tooClose) continue;
 
-    // vary camera types: some fast+narrow, some slow+wide, some long-range
-    const variant = rng();
-    const range = variant < 0.3
-      ? 4 * TILE + rng() * 2 * TILE   // short range (4-6 tiles)
-      : variant < 0.7
-        ? 6 * TILE + rng() * 2 * TILE  // medium (6-8 tiles)
-        : 8 * TILE + rng() * 3 * TILE; // long range (8-11 tiles)
-    const halfAngle = variant < 0.3
-      ? 28 + rng() * 15  // wide angle (28-43)
-      : variant < 0.7
-        ? 18 + rng() * 12 // medium (18-30)
-        : 10 + rng() * 10; // narrow sniper (10-20)
+    // cycle through camera types to guarantee variety
+    const variant = cameras.length % 3;
+    let range: number, halfAngle: number, speed: number;
+
+    if (variant === 0) {
+      // sentinel: short range, wide angle, slow sweep
+      range = 3 * TILE + rng() * 2 * TILE;
+      halfAngle = 35 + rng() * 15;
+      speed = 0.15 + rng() * 0.2;
+    } else if (variant === 1) {
+      // sniper: long range, narrow beam, fast sweep
+      range = 9 * TILE + rng() * 4 * TILE;
+      halfAngle = 8 + rng() * 8;
+      speed = 0.4 + rng() * 0.3;
+    } else {
+      // patrol: medium range, medium angle, medium speed
+      range = 5 * TILE + rng() * 3 * TILE;
+      halfAngle = 18 + rng() * 14;
+      speed = 0.25 + rng() * 0.35;
+    }
 
     cameras.push({
       col: spot.col,
@@ -183,8 +191,8 @@ export const generateLevel = (seed: number): GeneratedLevel => {
       wallCol: spot.wallCol,
       wallRow: spot.wallRow,
       baseAngle: spot.wallDir,
-      sweep: 40 + Math.floor(rng() * 50),
-      speed: 0.15 + rng() * 0.5,
+      sweep: 35 + Math.floor(rng() * 55),
+      speed,
       range,
       halfAngle,
     });
