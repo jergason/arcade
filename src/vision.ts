@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { TILE, COLS, ROWS } from './constants';
-import type { TileType, CameraState, Point } from './types';
+import type { TileType, VisionSource, Point } from './types';
 
 const RAY_STEP = 4;
 
@@ -33,7 +33,7 @@ export const raycast = (
   return maxDist;
 };
 
-export const isPointInCone = (px: number, py: number, cam: CameraState): boolean => {
+export const isPointInCone = (px: number, py: number, cam: VisionSource): boolean => {
   const dx = px - cam.x;
   const dy = py - cam.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
@@ -49,7 +49,7 @@ export const isPointInCone = (px: number, py: number, cam: CameraState): boolean
   return dist <= losRange;
 };
 
-export const buildConePolygon = (cam: CameraState, numRays = 30): Point[] => {
+export const buildConePolygon = (cam: VisionSource, numRays = 30): Point[] => {
   const startAngle = cam.currentAngle - cam.halfAngle;
   const endAngle = cam.currentAngle + cam.halfAngle;
   const step = (endAngle - startAngle) / numRays;
@@ -69,7 +69,7 @@ export const buildConePolygon = (cam: CameraState, numRays = 30): Point[] => {
   return points;
 };
 
-export const nearestConeDistance = (px: number, py: number, cam: CameraState): number => {
+export const nearestConeDistance = (px: number, py: number, cam: VisionSource): number => {
   const dx = px - cam.x;
   const dy = py - cam.y;
   const dist = Math.sqrt(dx * dx + dy * dy);

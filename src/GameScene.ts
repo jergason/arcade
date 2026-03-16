@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
-import { TILE, COLS, ROWS, WIDTH, HEIGHT, PLAYER_SPEED, SNEAK_SPEED } from './constants';
+import { TILE, COLS, ROWS, WIDTH, HEIGHT, PLAYER_SPEED, SNEAK_SPEED, GUARD_NOISE_LOOK_TIME } from './constants';
 import { generateLevel } from './procgen';
 import { setGrid, isPointInCone, buildConePolygon, nearestConeDistance } from './vision';
-import type { TileType, CameraDef, CameraState } from './types';
+import type { TileType, CameraDef, CameraState, GuardDef, GuardState } from './types';
 
 const NOISE_RADIUS = 5 * TILE;
 const NOISE_SNAP_SPEED = 2.5;
@@ -27,6 +27,9 @@ export class GameScene extends Phaser.Scene {
   private grid: TileType[][] = [];
   private cameraDefs: CameraDef[] = [];
   private cams: CameraState[] = [];
+  private guardDefs: GuardDef[] = [];
+  private guards: GuardState[] = [];
+  private guardGfx!: Phaser.GameObjects.Graphics;
   private coneGfx!: Phaser.GameObjects.Graphics;
   private vignetteGfx!: Phaser.GameObjects.Graphics;
   private trailGfx!: Phaser.GameObjects.Graphics;
@@ -77,14 +80,16 @@ export class GameScene extends Phaser.Scene {
 
     // generate level
     const seed = this.level * 7919 + 42;
-    const { grid, cameras } = generateLevel(seed);
+    const { grid, cameras, guards } = generateLevel(seed, this.level);
     this.grid = grid;
     this.cameraDefs = cameras;
+    this.guardDefs = guards;
     setGrid(grid);
 
     this.drawMap();
     this.spawnPlayer();
     this.buildCameras();
+    this.buildGuards();
     this.buildExit();
 
     this.cursors = this.input.keyboard!.createCursorKeys();
@@ -93,6 +98,7 @@ export class GameScene extends Phaser.Scene {
 
     this.trailGfx = this.add.graphics().setDepth(1);
     this.coneGfx = this.add.graphics();
+    this.guardGfx = this.add.graphics().setDepth(12);
     this.vignetteGfx = this.add.graphics().setDepth(90);
 
     this.hudText = this.add.text(WIDTH / 2, 12, '', {
@@ -233,9 +239,11 @@ export class GameScene extends Phaser.Scene {
     this.exitTime += dt;
     this.movePlayer(dt);
     this.updateCameras(dt);
+    this.updateGuards(dt);
     this.applyNoise(dt);
     this.drawTrail(dt);
     this.drawCones();
+    this.drawGuards();
     this.drawPlayer();
     this.drawExitPortal();
     this.checkDetection();
@@ -248,20 +256,23 @@ export class GameScene extends Phaser.Scene {
   private updateDeathSequence(dt: number): void {
     const t = this.caughtTimer;
 
-    // snap all cameras toward player and extend range to reach them
-    this.cams.forEach(cam => {
-      const dx = this.playerX - cam.x;
-      const dy = this.playerY - cam.y;
+    // snap all cameras and guards toward player and extend range to reach them
+    const snapToPlayer = (entity: { x: number; y: number; currentAngle: number; range: number; detected: boolean }) => {
+      const dx = this.playerX - entity.x;
+      const dy = this.playerY - entity.y;
       const distToPlayer = Math.sqrt(dx * dx + dy * dy) + TILE;
       const angleToPlayer = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
-      const diff = Phaser.Math.Angle.ShortestBetween(cam.currentAngle, angleToPlayer);
-      cam.currentAngle += diff * Math.min(t * 8, 1);
-      cam.range = Math.max(cam.range, distToPlayer);
-      cam.detected = true;
-    });
+      const diff = Phaser.Math.Angle.ShortestBetween(entity.currentAngle, angleToPlayer);
+      entity.currentAngle += diff * Math.min(t * 8, 1);
+      entity.range = Math.max(entity.range, distToPlayer);
+      entity.detected = true;
+    };
+    this.cams.forEach(snapToPlayer);
+    this.guards.forEach(snapToPlayer);
 
-    // redraw cones (all red, all pointing at player)
+    // redraw cones and guards (all red, all pointing at player)
     this.drawCones();
+    this.drawGuards();
     this.drawPlayer();
 
     // screen shake — decays over time
@@ -586,6 +597,143 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  // ── guards ──────────────────────────────────────────────
+  private buildGuards(): void {
+    this.guards = this.guardDefs.map(def => {
+      const wp0 = def.waypoints[0];
+      const wp1 = def.waypoints.length > 1 ? def.waypoints[1] : def.waypoints[0];
+      const facingAngle = Phaser.Math.RadToDeg(
+        Math.atan2((wp1.row - wp0.row), (wp1.col - wp0.col))
+      );
+      return {
+        x: wp0.col * TILE + TILE / 2,
+        y: wp0.row * TILE + TILE / 2,
+        currentAngle: facingAngle,
+        range: def.range,
+        halfAngle: def.halfAngle,
+        wallCol: -1,
+        wallRow: -1,
+        waypoints: def.waypoints,
+        waypointIndex: 1,
+        direction: 1 as const,
+        walkSpeed: def.speed,
+        pauseTimer: 0,
+        pauseTime: def.pauseTime,
+        noiseAngle: null,
+        noiseTimer: 0,
+        detected: false,
+      };
+    });
+  }
+
+  private updateGuards(dt: number): void {
+    this.guards.forEach(guard => {
+      // pausing at waypoint
+      if (guard.pauseTimer > 0) {
+        guard.pauseTimer -= dt;
+        return;
+      }
+
+      // investigating noise — stand still and stare
+      if (guard.noiseAngle !== null) {
+        guard.currentAngle = guard.noiseAngle;
+        guard.noiseTimer -= dt;
+        if (guard.noiseTimer <= 0) {
+          guard.noiseAngle = null;
+        }
+        return;
+      }
+
+      const target = guard.waypoints[guard.waypointIndex];
+      const tx = target.col * TILE + TILE / 2;
+      const ty = target.row * TILE + TILE / 2;
+      const dx = tx - guard.x;
+      const dy = ty - guard.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > 0.5) {
+        guard.currentAngle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+      }
+
+      const step = guard.walkSpeed * TILE * dt;
+
+      if (dist <= step) {
+        guard.x = tx;
+        guard.y = ty;
+        guard.pauseTimer = guard.pauseTime;
+
+        // ping-pong: reverse at ends
+        const next = guard.waypointIndex + guard.direction;
+        if (next < 0 || next >= guard.waypoints.length) {
+          guard.direction = (guard.direction * -1) as 1 | -1;
+          guard.waypointIndex += guard.direction;
+        } else {
+          guard.waypointIndex = next;
+        }
+      } else {
+        guard.x += (dx / dist) * step;
+        guard.y += (dy / dist) * step;
+      }
+    });
+  }
+
+  private drawGuards(): void {
+    const gfx = this.guardGfx;
+    gfx.clear();
+
+    this.guards.forEach(guard => {
+      const x = guard.x;
+      const y = guard.y;
+      const angle = Phaser.Math.DegToRad(guard.currentAngle);
+      const bodyColor = guard.detected ? 0xff2222 : 0xdd8844;
+      const outlineColor = guard.detected ? 0xff0000 : 0xaa6633;
+
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      const px = -dy;
+      const py = dx;
+
+      // stockier triangle body
+      const noseTipX = x + dx * 9;
+      const noseTipY = y + dy * 9;
+      const backLeftX = x - dx * 5 + px * 8;
+      const backLeftY = y - dy * 5 + py * 8;
+      const backRightX = x - dx * 5 - px * 8;
+      const backRightY = y - dy * 5 - py * 8;
+
+      gfx.fillStyle(bodyColor);
+      gfx.beginPath();
+      gfx.moveTo(noseTipX, noseTipY);
+      gfx.lineTo(backLeftX, backLeftY);
+      gfx.lineTo(backRightX, backRightY);
+      gfx.closePath();
+      gfx.fillPath();
+
+      gfx.lineStyle(1.5, outlineColor);
+      gfx.beginPath();
+      gfx.moveTo(noseTipX, noseTipY);
+      gfx.lineTo(backLeftX, backLeftY);
+      gfx.lineTo(backRightX, backRightY);
+      gfx.closePath();
+      gfx.strokePath();
+
+      // head
+      const headX = x + dx * 1;
+      const headY = y + dy * 1;
+      gfx.fillStyle(bodyColor);
+      gfx.fillCircle(headX, headY, 5);
+      gfx.lineStyle(1, outlineColor);
+      gfx.strokeCircle(headX, headY, 5);
+
+      // red eyes
+      const eyeOffset = 4;
+      const eyeSpread = 2;
+      gfx.fillStyle(0xff0000);
+      gfx.fillCircle(headX + dx * eyeOffset + px * eyeSpread, headY + dy * eyeOffset + py * eyeSpread, 1.5);
+      gfx.fillCircle(headX + dx * eyeOffset - px * eyeSpread, headY + dy * eyeOffset - py * eyeSpread, 1.5);
+    });
+  }
+
   private applyNoise(dt: number): void {
     if (this.isSneaking()) return;
     if (!this.isMoving()) return;
@@ -600,6 +748,17 @@ export class GameScene extends Phaser.Scene {
       const diff = Phaser.Math.Angle.ShortestBetween(cam.currentAngle, angleToPlayer);
       const strength = 1 - (dist / NOISE_RADIUS);
       cam.currentAngle += diff * NOISE_SNAP_SPEED * strength * dt;
+    });
+
+    // guards stop and stare at noise
+    this.guards.forEach(guard => {
+      const dx = this.playerX - guard.x;
+      const dy = this.playerY - guard.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > NOISE_RADIUS) return;
+
+      guard.noiseAngle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+      guard.noiseTimer = GUARD_NOISE_LOOK_TIME;
     });
   }
 
@@ -638,6 +797,28 @@ export class GameScene extends Phaser.Scene {
       gfx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
       gfx.strokePath();
     });
+
+    // guard cones (orange)
+    this.guards.forEach(guard => {
+      const points = buildConePolygon(guard);
+      const color = guard.detected ? 0xff2222 : 0xff8844;
+      const alpha = guard.detected ? 0.35 : 0.15;
+
+      gfx.fillStyle(color, alpha);
+      gfx.beginPath();
+      gfx.moveTo(points[0].x, points[0].y);
+      points.slice(1).forEach(p => gfx.lineTo(p.x, p.y));
+      gfx.closePath();
+      gfx.fillPath();
+
+      gfx.lineStyle(1, color, alpha + 0.15);
+      gfx.beginPath();
+      gfx.moveTo(guard.x, guard.y);
+      gfx.lineTo(points[1].x, points[1].y);
+      gfx.moveTo(guard.x, guard.y);
+      gfx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+      gfx.strokePath();
+    });
   }
 
   // ── detection ───────────────────────────────────────────
@@ -647,11 +828,20 @@ export class GameScene extends Phaser.Scene {
       return Math.min(closest, d);
     }, Infinity);
 
+    this.proximity = this.guards.reduce((closest, guard) => {
+      const d = nearestConeDistance(this.playerX, this.playerY, guard);
+      return Math.min(closest, d);
+    }, this.proximity);
+
     this.cams.forEach(cam => {
       cam.detected = isPointInCone(this.playerX, this.playerY, cam);
     });
 
-    const seen = this.cams.some(cam => cam.detected);
+    this.guards.forEach(guard => {
+      guard.detected = isPointInCone(this.playerX, this.playerY, guard);
+    });
+
+    const seen = this.cams.some(c => c.detected) || this.guards.some(g => g.detected);
     if (seen) {
       this.caught = true;
       this.caughtTimer = 0;
@@ -663,8 +853,8 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.vignetteGfx;
     gfx.clear();
 
-    // use the closest camera's range for danger distance
-    const maxRange = this.cams.reduce((m, c) => Math.max(m, c.range), 0);
+    // use the closest camera/guard range for danger distance
+    const maxRange = [...this.cams, ...this.guards].reduce((m, c) => Math.max(m, c.range), 0);
     const dangerDist = maxRange * 0.5;
     if (this.proximity < dangerDist) {
       const intensity = 1 - (this.proximity / dangerDist);

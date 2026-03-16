@@ -1,9 +1,10 @@
-import type { TileType, CameraDef } from './types';
+import type { TileType, CameraDef, GuardDef } from './types';
 import { TILE, COLS, ROWS } from './constants';
 
 export interface GeneratedLevel {
   grid: TileType[][];
   cameras: CameraDef[];
+  guards: GuardDef[];
 }
 
 // seeded rng for reproducible levels
@@ -87,7 +88,52 @@ const findCameraSpots = (grid: TileType[][]): { col: number; row: number; wallCo
   return spots;
 };
 
-export const generateLevel = (seed: number): GeneratedLevel => {
+// find straight-line floor corridors suitable for guard patrol routes
+const findPatrolRoutes = (grid: TileType[][], rng: () => number): { col: number; row: number }[][] => {
+  const routes: { col: number; row: number }[][] = [];
+
+  // horizontal corridors
+  for (let r = 1; r < ROWS - 1; r++) {
+    let start = -1;
+    for (let c = 1; c <= COLS - 1; c++) {
+      const isFloor = c < COLS - 1 && grid[r][c] !== 1;
+      if (isFloor && start === -1) start = c;
+      if ((!isFloor || c === COLS - 1) && start !== -1) {
+        const end = isFloor ? c : c - 1;
+        if (end - start >= 3) {
+          routes.push([{ col: start, row: r }, { col: end, row: r }]);
+        }
+        start = -1;
+      }
+    }
+  }
+
+  // vertical corridors
+  for (let c = 1; c < COLS - 1; c++) {
+    let start = -1;
+    for (let r = 1; r <= ROWS - 1; r++) {
+      const isFloor = r < ROWS - 1 && grid[r][c] !== 1;
+      if (isFloor && start === -1) start = r;
+      if ((!isFloor || r === ROWS - 1) && start !== -1) {
+        const end = isFloor ? r : r - 1;
+        if (end - start >= 3) {
+          routes.push([{ col: c, row: start }, { col: c, row: end }]);
+        }
+        start = -1;
+      }
+    }
+  }
+
+  // shuffle
+  for (let i = routes.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [routes[i], routes[j]] = [routes[j], routes[i]];
+  }
+
+  return routes;
+};
+
+export const generateLevel = (seed: number, level: number = 1): GeneratedLevel => {
   const rng = mulberry32(seed);
 
   // start with border walls
@@ -198,5 +244,58 @@ export const generateLevel = (seed: number): GeneratedLevel => {
     });
   }
 
-  return { grid, cameras };
+  // place patrol guards (starting level 2)
+  const guards: GuardDef[] = [];
+  const numGuards = level <= 1 ? 0 : Math.min(level - 1, 3);
+
+  if (numGuards > 0) {
+    const routes = findPatrolRoutes(grid, rng);
+
+    for (const route of routes) {
+      if (guards.length >= numGuards) break;
+
+      // check ALL waypoints against start and exit (not just midpoint)
+      const tooCloseToSpawn = route.some(wp => {
+        const dStart = Math.abs(wp.col - startC) + Math.abs(wp.row - startR);
+        const dExit = Math.abs(wp.col - exitC) + Math.abs(wp.row - exitR);
+        return dStart < 6 || dExit < 5;
+      });
+      if (tooCloseToSpawn) continue;
+
+      const midCol = (route[0].col + route[1].col) / 2;
+      const midRow = (route[0].row + route[1].row) / 2;
+
+      // too close to another guard route?
+      const tooClose = guards.some(g => {
+        const gMidCol = (g.waypoints[0].col + g.waypoints[1].col) / 2;
+        const gMidRow = (g.waypoints[0].row + g.waypoints[1].row) / 2;
+        return Math.abs(gMidCol - midCol) + Math.abs(gMidRow - midRow) < 6;
+      });
+      if (tooClose) continue;
+
+      // alternate between sentry and patroller variants
+      const variant = guards.length % 2;
+      if (variant === 0) {
+        // sentry: slow, wide cone, short range, long pause
+        guards.push({
+          waypoints: route,
+          speed: 1.0 + rng() * 0.4,
+          range: (3 + rng()) * TILE,
+          halfAngle: 25 + rng() * 10,
+          pauseTime: 1.0 + rng() * 1.0,
+        });
+      } else {
+        // patroller: faster, narrow cone, longer range, short pause
+        guards.push({
+          waypoints: route,
+          speed: 1.6 + rng() * 0.8,
+          range: (4.5 + rng() * 1.5) * TILE,
+          halfAngle: 14 + rng() * 8,
+          pauseTime: 0.3 + rng() * 0.4,
+        });
+      }
+    }
+  }
+
+  return { grid, cameras, guards };
 };

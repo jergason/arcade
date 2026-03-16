@@ -8,3 +8,4 @@ export const CONE_RANGE = 6 * TILE;
 export const CONE_HALF_ANGLE = 22;
 export const PLAYER_SPEED = 160;
 export const SNEAK_SPEED = 80;
+export const GUARD_NOISE_LOOK_TIME = 2;
