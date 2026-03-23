@@ -3,6 +3,7 @@ import { TILE, COLS, ROWS, WIDTH, HEIGHT, PLAYER_SPEED, SNEAK_SPEED, GUARD_NOISE
 import { generateLevel } from './procgen';
 import { setGrid, isPointInCone, buildConePolygon, nearestConeDistance } from './vision';
 import type { TileType, CameraDef, CameraState, GuardDef, GuardState } from './types';
+import { agentInput, initAgentMode, updateAgentState } from './agentAPI';
 
 const NOISE_RADIUS = 5 * TILE;
 const NOISE_SNAP_SPEED = 2.5;
@@ -131,6 +132,10 @@ export class GameScene extends Phaser.Scene {
 
     this.updateHud();
     this.setupTouch();
+    initAgentMode({
+      restart: () => this.scene.restart(),
+      nextLevel: () => { this.level++; this.scene.restart(); },
+    });
   }
 
   // ── touch controls ────────────────────────────────────
@@ -225,15 +230,29 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    // agent step mode: pause until __step() is called
+    if (agentInput.enabled && agentInput.stepMode && agentInput.pendingSteps <= 0) {
+      this.pushAgentState();
+      return;
+    }
+    if (agentInput.enabled && agentInput.stepMode) {
+      agentInput.pendingSteps--;
+      delta = agentInput.fixedDt;
+    }
+
     const dt = delta / 1000;
 
     if (this.caught) {
       this.caughtTimer += dt;
       this.updateDeathSequence(dt);
+      this.pushAgentState();
       return;
     }
 
-    if (this.won) return;
+    if (this.won) {
+      this.pushAgentState();
+      return;
+    }
 
     this.elapsed += dt;
     this.exitTime += dt;
@@ -251,6 +270,7 @@ export class GameScene extends Phaser.Scene {
     this.checkExit();
     this.drawJoystick();
     this.updateHud();
+    this.pushAgentState();
   }
 
   private updateDeathSequence(dt: number): void {
@@ -418,10 +438,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private isSneaking(): boolean {
+    if (agentInput.enabled) return agentInput.sneaking;
     return this.shiftKey.isDown || this.touchSneaking;
   }
 
   private isMoving(): boolean {
+    if (agentInput.enabled) return agentInput.vx !== 0 || agentInput.vy !== 0;
     return this.cursors.left.isDown || this.cursors.right.isDown ||
       this.cursors.up.isDown || this.cursors.down.isDown ||
       this.wasd.A.isDown || this.wasd.D.isDown ||
@@ -446,6 +468,12 @@ export class GameScene extends Phaser.Scene {
     if (this.touchMoving) {
       vx = this.touchVx;
       vy = this.touchVy;
+    }
+
+    // agent input overrides all
+    if (agentInput.enabled) {
+      vx = agentInput.vx;
+      vy = agentInput.vy;
     }
 
     const moving = vx !== 0 || vy !== 0;
@@ -878,6 +906,20 @@ export class GameScene extends Phaser.Scene {
         ? 'drag to move · SNK button to sneak · reach the portal'
         : 'WASD/arrows · SHIFT to sneak (silent) · reach the portal');
     }
+  }
+
+  // ── agent state push ──────────────────────────────────
+  private pushAgentState(): void {
+    if (!agentInput.enabled) return;
+    updateAgentState({
+      playerX: this.playerX, playerY: this.playerY, playerAngle: this.playerAngle,
+      sneaking: this.isSneaking(), moving: this.isMoving(),
+      cams: this.cams, guards: this.guards,
+      exitX: this.exitX, exitY: this.exitY,
+      caught: this.caught, won: this.won,
+      elapsed: this.elapsed, level: this.level,
+      grid: this.grid, proximity: this.proximity,
+    });
   }
 
   // ── best time persistence ──────────────────────────────
