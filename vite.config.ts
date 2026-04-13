@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
 export default defineConfig({
-  base: process.env.NODE_ENV === 'production' ? '/arcade/' : '/',
+  base: '/',
   build: {
     rollupOptions: {
       input: {
